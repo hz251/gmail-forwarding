@@ -69,21 +69,18 @@ cd gmail-forwarding
 
 ```bash
 cp .env.example .env
-# 编辑 .env 文件，填入实际配置
+# 编辑 .env 文件，填入实际的Gmail和数据库配置
 ```
 
-#### 3. Docker 部署（推荐）
+#### 3. 部署方式
+
+**Docker 部署（推荐）**
 
 ```bash
-# 1. 复制并配置环境变量
-cp .env.example .env
-# 编辑 .env 文件，设置真实的配置信息
-
-# 2. 启动服务
 docker-compose up -d
 ```
 
-#### 4. 本地开发
+**本地开发**
 
 ```bash
 # 安装依赖
