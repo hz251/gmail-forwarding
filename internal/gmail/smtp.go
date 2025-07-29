@@ -2,45 +2,82 @@ package gmail
 
 import (
 	"fmt"
+	"log"
 	"net/smtp"
 	"strings"
+	"time"
 )
 
 // SMTPClient SMTP 客户端
 type SMTPClient struct {
-	host     string
-	port     string
-	username string
-	password string
+	host        string
+	port        string
+	username    string
+	password    string
+	maxRetries  int
+	retryDelay time.Duration
+	timeout     time.Duration
 }
 
 // NewSMTPClient 创建新的 SMTP 客户端
 func NewSMTPClient(username, password string) *SMTPClient {
 	return &SMTPClient{
-		host:     "smtp.gmail.com",
-		port:     "587",
-		username: username,
-		password: password,
+		host:        "smtp.gmail.com",
+		port:        "587",
+		username:    username,
+		password:    password,
+		maxRetries:  3,
+		retryDelay:  2 * time.Second,
+		timeout:     30 * time.Second,
 	}
 }
 
-// ForwardEmail 转发邮件
+// ForwardEmail 转发邮件 - 使用改进的SMTP实现和重试机制
 func (sc *SMTPClient) ForwardEmail(email *Email, toEmail string) error {
-	// SMTP 服务器地址
-	addr := fmt.Sprintf("%s:%s", sc.host, sc.port)
-
-	// 认证
-	auth := smtp.PlainAuth("", sc.username, sc.password, sc.host)
-
+	log.Printf("开始发送邮件到: %s", toEmail)
+	
 	// 构建邮件内容
 	message := sc.buildForwardMessage(email, toEmail)
+	
+	// 使用重试机制发送邮件
+	var lastErr error
+	for attempt := 1; attempt <= sc.maxRetries; attempt++ {
+		log.Printf("尝试发送邮件 - 第 %d/%d 次", attempt, sc.maxRetries)
+		
+		err := sc.sendEmailWithManualSMTP(toEmail, message)
+		if err == nil {
+			log.Printf("邮件成功发送到: %s (第%d次尝试)", toEmail, attempt)
+			return nil
+		}
+		
+		lastErr = err
+		log.Printf("第%d次尝试失败: %v", attempt, err)
+		
+		// 如果不是最后一次尝试，等待一段时间再重试
+		if attempt < sc.maxRetries {
+			log.Printf("等待 %v 后重试...", sc.retryDelay)
+			time.Sleep(sc.retryDelay)
+		}
+	}
+	
+	return fmt.Errorf("发送邮件失败，已经进行%d次尝试: %w", sc.maxRetries, lastErr)
+}
 
-	// 发送邮件
+// sendEmailWithManualSMTP 直接使用smtp.SendMail，简化实现
+func (sc *SMTPClient) sendEmailWithManualSMTP(toEmail, message string) error {
+	addr := fmt.Sprintf("%s:%s", sc.host, sc.port)
+	log.Printf("使用smtp.SendMail发送到: %s", addr)
+	
+	// 使用简化的认证和发送
+	auth := smtp.PlainAuth("", sc.username, sc.password, sc.host)
+	
 	err := smtp.SendMail(addr, auth, sc.username, []string{toEmail}, []byte(message))
 	if err != nil {
-		return fmt.Errorf("failed to send email: %w", err)
+		log.Printf("smtp.SendMail失败: %v", err)
+		return fmt.Errorf("smtp.SendMail失败: %w", err)
 	}
-
+	
+	log.Printf("邮件成功发送")
 	return nil
 }
 
@@ -93,3 +130,4 @@ func (sc *SMTPClient) buildForwardMessage(email *Email, toEmail string) string {
 
 	return message.String()
 }
+
