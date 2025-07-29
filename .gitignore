@@ -1,0 +1,24 @@
+# 环境变量文件
+.env
+
+# 日志文件
+logs/
+*.log
+
+# 编译输出
+main
+gmail-forwarding
+
+# IDE 文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# 临时文件
+tmp/
+temp/
