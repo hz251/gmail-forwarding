@@ -54,7 +54,6 @@ func InitDB() error {
 	err = DB.AutoMigrate(
 		&models.Recipient{},
 		&models.ForwardingRule{},
-		&models.EmailLog{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to migrate database: %w", err)

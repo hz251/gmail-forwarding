@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"time"
 
 	"gmail-forwarding/internal/database"
 	"gmail-forwarding/internal/gmail"
@@ -30,24 +29,32 @@ func NewEmailProcessor(imapClient *gmail.IMAPClient, smtpClient *gmail.SMTPClien
 
 // SubjectParseResult 主题解析结果
 type SubjectParseResult struct {
-	Keyword   string
-	Recipient string
+	Keyword string
+	Email   string
 }
 
-// parseSubject 解析邮件主题，提取关键字和转发对象
+// parseSubject 解析邮件主题，提取关键字和邮箱地址
 func (ep *EmailProcessor) parseSubject(subject string) (*SubjectParseResult, error) {
-	// 使用正则表达式解析主题格式：关键字 - 转发对象
-	// 支持中英文字符、数字、空格等
+	// 使用正则表达式解析主题格式：关键字 - 邮箱地址
 	re := regexp.MustCompile(`^(.+?)\s*-\s*(.+?)$`)
 	matches := re.FindStringSubmatch(strings.TrimSpace(subject))
 
 	if len(matches) != 3 {
-		return nil, fmt.Errorf("邮件主题格式不正确，应为：关键字 - 转发对象")
+		return nil, fmt.Errorf("邮件主题格式不正确，应为：关键字 - 邮箱地址")
+	}
+
+	keyword := strings.TrimSpace(matches[1])
+	email := strings.TrimSpace(matches[2])
+
+	// 验证邮箱格式
+	emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+	if !emailRegex.MatchString(email) {
+		return nil, fmt.Errorf("邮箱地址格式不正确: %s", email)
 	}
 
 	return &SubjectParseResult{
-		Keyword:   strings.TrimSpace(matches[1]),
-		Recipient: strings.TrimSpace(matches[2]),
+		Keyword: keyword,
+		Email:   email,
 	}, nil
 }
 
@@ -64,36 +71,39 @@ func (ep *EmailProcessor) checkForwardingRule(keyword string) (bool, error) {
 	return true, nil
 }
 
-// findRecipient 根据姓名查找转发对象
-func (ep *EmailProcessor) findRecipient(name string) (*models.Recipient, error) {
+// findOrCreateRecipient 根据邮箱地址查找或创建转发对象
+func (ep *EmailProcessor) findOrCreateRecipient(email string) (*models.Recipient, error) {
 	db := database.GetDB()
 	var recipient models.Recipient
 
-	err := db.Where("name = ?", name).First(&recipient).Error
-	if err != nil {
-		return nil, err
+	// 首先尝试根据邮箱地址查找现有记录
+	err := db.Where("email = ?", email).First(&recipient).Error
+	if err == nil {
+		// 找到现有记录
+		return &recipient, nil
 	}
 
+	// 如果不存在，创建新记录
+	// 使用邮箱地址的用户名部分作为名称
+	atIndex := strings.Index(email, "@")
+	name := email
+	if atIndex > 0 {
+		name = email[:atIndex]
+	}
+
+	recipient = models.Recipient{
+		Name:  name,
+		Email: email,
+	}
+
+	if err := db.Create(&recipient).Error; err != nil {
+		return nil, fmt.Errorf("创建转发对象失败: %w", err)
+	}
+
+	log.Printf("创建新的转发对象: %s <%s>", recipient.Name, recipient.Email)
 	return &recipient, nil
 }
 
-// logEmailAction 记录邮件处理日志
-func (ep *EmailProcessor) logEmailAction(email *gmail.Email, recipient *models.Recipient, status, errorMsg string) error {
-	db := database.GetDB()
-
-	now := time.Now()
-	emailLog := &models.EmailLog{
-		MessageID:   email.MessageID,
-		Subject:     email.Subject,
-		FromEmail:   email.From,
-		RecipientID: recipient.ID,
-		Status:      status,
-		Error:       errorMsg,
-		ForwardedAt: &now,
-	}
-
-	return db.Create(emailLog).Error
-}
 
 // ProcessEmails 处理邮件主函数
 func (ep *EmailProcessor) ProcessEmails() error {
@@ -148,7 +158,7 @@ func (ep *EmailProcessor) processEmail(email *gmail.Email) error {
 		return nil // 不是转发格式的邮件，跳过
 	}
 
-	log.Printf("解析结果 - 关键字: %s, 转发对象: %s", parseResult.Keyword, parseResult.Recipient)
+	log.Printf("解析结果 - 关键字: %s, 转发邮箱: %s", parseResult.Keyword, parseResult.Email)
 
 	// 检查转发规则
 	ruleExists, err := ep.checkForwardingRule(parseResult.Keyword)
@@ -162,13 +172,10 @@ func (ep *EmailProcessor) processEmail(email *gmail.Email) error {
 		return nil
 	}
 
-	// 查找转发对象
-	recipient, err := ep.findRecipient(parseResult.Recipient)
+	// 查找或创建转发对象
+	recipient, err := ep.findOrCreateRecipient(parseResult.Email)
 	if err != nil {
-		log.Printf("查找转发对象失败: %v", err)
-		// 记录失败日志
-		dummyRecipient := &models.Recipient{Model: models.Recipient{}.Model, Name: parseResult.Recipient}
-		ep.logEmailAction(email, dummyRecipient, "failed", fmt.Sprintf("转发对象不存在: %v", err))
+		log.Printf("查找或创建转发对象失败: %v", err)
 		return nil
 	}
 
@@ -178,12 +185,9 @@ func (ep *EmailProcessor) processEmail(email *gmail.Email) error {
 	err = ep.smtpClient.ForwardEmail(email, recipient.Email)
 	if err != nil {
 		log.Printf("转发邮件失败: %v", err)
-		ep.logEmailAction(email, recipient, "failed", err.Error())
 		return err
 	}
 
-	// 记录成功日志
-	ep.logEmailAction(email, recipient, "success", "")
 	log.Printf("邮件成功转发给: %s", recipient.Email)
 
 	return nil

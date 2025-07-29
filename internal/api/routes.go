@@ -50,13 +50,6 @@ func SetupRoutes() *gin.Engine {
 			rules.DELETE("/:id", handlers.DeleteRule)
 		}
 
-		// 邮件日志查询
-		logs := api.Group("/logs")
-		{
-			logs.GET("", handlers.GetLogs)
-			logs.GET("/:id", handlers.GetLog)
-			logs.GET("/stats", handlers.GetLogStats)
-		}
 
 		// 邮件处理
 		api.POST("/process", handlers.ProcessEmails)
