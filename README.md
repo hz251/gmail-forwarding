@@ -75,6 +75,11 @@ cp .env.example .env
 #### 3. Docker 部署（推荐）
 
 ```bash
+# 1. 复制并配置环境变量
+cp .env.example .env
+# 编辑 .env 文件，设置真实的配置信息
+
+# 2. 启动服务
 docker-compose up -d
 ```
 
@@ -121,7 +126,7 @@ go run cmd/server/main.go
 | GMAIL_APP_PASSWORD | 应用专用密码 | - |
 | DB_HOST | 数据库主机 | localhost |
 | DB_PORT | 数据库端口 | 3306 |
-| DB_USER | 数据库用户 | root |
+| DB_USER | 数据库用户 | gmail_user |
 | DB_PASSWORD | 数据库密码 | - |
 | DB_NAME | 数据库名 | gmail_forwarding |
 | APP_PORT | 应用端口 | 8080 |
