@@ -58,17 +58,42 @@ func (ep *EmailProcessor) parseSubject(subject string) (*SubjectParseResult, err
 	}, nil
 }
 
-// checkForwardingRule 检查转发规则是否存在且启用
-func (ep *EmailProcessor) checkForwardingRule(keyword string) (bool, error) {
+// loadActiveRules 预加载所有启用的转发规则
+func (ep *EmailProcessor) loadActiveRules() (map[string]bool, error) {
 	db := database.GetDB()
-	var rule models.ForwardingRule
+	var rules []models.ForwardingRule
 
-	err := db.Where("keyword = ? AND active = ?", keyword, true).First(&rule).Error
+	err := db.Where("active = ?", true).Find(&rules).Error
 	if err != nil {
-		return false, err
+		return nil, fmt.Errorf("加载转发规则失败: %w", err)
 	}
 
-	return true, nil
+	rulesMap := make(map[string]bool)
+	for _, rule := range rules {
+		rulesMap[rule.Keyword] = true
+	}
+
+	log.Printf("已加载 %d 个启用的转发规则", len(rulesMap))
+	return rulesMap, nil
+}
+
+// shouldForward 检查邮件是否应该转发
+func (ep *EmailProcessor) shouldForward(email *gmail.Email, activeRules map[string]bool) (*SubjectParseResult, bool) {
+	// 解析邮件主题
+	parseResult, err := ep.parseSubject(email.Subject)
+	if err != nil {
+		log.Printf("邮件主题解析失败: %v", err)
+		return nil, false // 不是转发格式的邮件，跳过
+	}
+
+	// 内存中快速匹配关键字
+	if !activeRules[parseResult.Keyword] {
+		log.Printf("关键字 '%s' 没有对应的转发规则", parseResult.Keyword)
+		return parseResult, false
+	}
+
+	log.Printf("匹配到转发规则 - 关键字: %s, 转发邮箱: %s", parseResult.Keyword, parseResult.Email)
+	return parseResult, true
 }
 
 // findOrCreateRecipient 根据邮箱地址查找或创建转发对象
@@ -112,6 +137,12 @@ func (ep *EmailProcessor) ProcessEmails() error {
 
 	log.Println("开始处理邮件...")
 
+	// 预加载所有启用的转发规则
+	activeRules, err := ep.loadActiveRules()
+	if err != nil {
+		return fmt.Errorf("加载转发规则失败: %w", err)
+	}
+
 	// 连接 IMAP 服务器
 	if err := ep.imapClient.Connect(); err != nil {
 		return fmt.Errorf("连接IMAP服务器失败: %w", err)
@@ -133,7 +164,7 @@ func (ep *EmailProcessor) ProcessEmails() error {
 
 	// 处理每封邮件
 	for _, email := range emails {
-		if err := ep.processEmail(email); err != nil {
+		if err := ep.processEmailWithRules(email, activeRules); err != nil {
 			log.Printf("处理邮件失败 [%s]: %v", email.Subject, err)
 		}
 
@@ -147,29 +178,24 @@ func (ep *EmailProcessor) ProcessEmails() error {
 	return nil
 }
 
-// processEmail 处理单封邮件
+// processEmail 处理单封邮件（旧方法，保留兼容性）
 func (ep *EmailProcessor) processEmail(email *gmail.Email) error {
+	// 加载规则并调用新方法
+	activeRules, err := ep.loadActiveRules()
+	if err != nil {
+		return fmt.Errorf("加载转发规则失败: %w", err)
+	}
+	return ep.processEmailWithRules(email, activeRules)
+}
+
+// processEmailWithRules 使用预加载规则处理单封邮件
+func (ep *EmailProcessor) processEmailWithRules(email *gmail.Email, activeRules map[string]bool) error {
 	log.Printf("处理邮件: %s", email.Subject)
 
-	// 解析邮件主题
-	parseResult, err := ep.parseSubject(email.Subject)
-	if err != nil {
-		log.Printf("邮件主题解析失败: %v", err)
-		return nil // 不是转发格式的邮件，跳过
-	}
-
-	log.Printf("解析结果 - 关键字: %s, 转发邮箱: %s", parseResult.Keyword, parseResult.Email)
-
-	// 检查转发规则
-	ruleExists, err := ep.checkForwardingRule(parseResult.Keyword)
-	if err != nil {
-		log.Printf("检查转发规则失败: %v", err)
-		return nil // 规则不存在，跳过
-	}
-
-	if !ruleExists {
-		log.Printf("关键字 '%s' 没有对应的转发规则", parseResult.Keyword)
-		return nil
+	// 检查邮件是否应该转发
+	parseResult, shouldForward := ep.shouldForward(email, activeRules)
+	if !shouldForward {
+		return nil // 不需要转发，跳过
 	}
 
 	// 查找或创建转发对象

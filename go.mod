@@ -1,6 +1,6 @@
 module gmail-forwarding
 
-go 1.17
+go 1.23
 
 require (
 	github.com/emersion/go-imap v1.2.1
